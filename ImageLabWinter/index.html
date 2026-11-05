@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <script src="https://aframe.io/releases/1.7.1/aframe.min.js"> </script>
+     <script src="https://unpkg.com/aframe-environment-component/dist/aframe-environment-component.min.js"></script>
+  </head>
+  <body>
+    <a-scene>
+      <a-entity position="0 0 -4">
+        <!-- body -->
+        <a-sphere position="0 0.8 0" radius="0.8" color="#F5FAFF"></a-sphere>
+        <a-sphere position="0 1.85 0" radius="0.6" color="#F5FAFF"></a-sphere>
+        <a-sphere position="0 2.65 0" radius="0.45" color="#F5FAFF"></a-sphere>
+
+        <!-- eyes -->
+        <a-sphere position="-0.15 2.75 0.405" radius="0.055" color="#20252B"></a-sphere>
+        <a-sphere position="0.15 2.75 0.405" radius="0.055" color="#20252B"></a-sphere>
+
+        <!-- nose -->
+        <a-cone position="0 2.63 0.58" rotation="90 0 0" radius-bottom="0.085" radius-top="0" height="0.4" color="#F58220"></a-cone>
+
+        <!-- smile -->
+        <a-sphere position="-0.17 2.52 0.395" radius="0.03" color="#20252B"></a-sphere>
+        <a-sphere position="-0.09 2.47 0.405" radius="0.03" color="#20252B"></a-sphere>
+        <a-sphere position="0 2.45 0.405" radius="0.03" color="#20252B"></a-sphere>
+        <a-sphere position="0.09 2.47 0.405" radius="0.03" color="#20252B"></a-sphere>
+        <a-sphere position="0.17 2.52 0.395" radius="0.03" color="#20252B"></a-sphere>
+
+        <!-- buttons -->
+        <a-sphere position="0 2.07 0.55" radius="0.065" color="#20252B"></a-sphere>
+        <a-sphere position="0 1.82 0.59" radius="0.065" color="#20252B"></a-sphere>
+        <a-sphere position="0 1.57 0.53" radius="0.065" color="#20252B"></a-sphere>
+
+        <!-- arms -->
+        <a-cylinder position="-0.95 2.05 0" rotation="0 0 55" radius="0.035" height="1" color="#6B4226"></a-cylinder>
+        <a-cylinder position="0.95 2.05 0" rotation="0 0 -55" radius="0.035" height="1" color="#6B4226"></a-cylinder>
+
+        <!-- top hat -->
+        <a-cylinder position="0 3.02 0" radius="0.55" height="0.05" color="#20252B"></a-cylinder>
+        <a-cylinder position="0 3.26 0" radius="0.33" height="0.45" color="#20252B"></a-cylinder>
+        <a-cylinder position="0 3.1 0" radius="0.335" height="0.1" color="#C62828"></a-cylinder>
+
+        <!-- scarf -->
+        <a-cylinder position="0 2.3 0" radius="0.47" height="0.18" color="#C62828"></a-cylinder>
+        <a-box position="0.25 2.04 0.56" rotation="-30 10 10" width="0.18" height="0.55" depth="0.08" color="#C62828"></a-box>
+
+      </a-entity>
+      <!-- <a-sky color="#ECECEC"></a-sky> -->
+      <!-- the enviroment entity includes a sky. Choose from the presets"none, default, contact, egypt, checkerboard, forest, goaland, yavapai, goldmine, threetowers, poison, arches, tron, japan, dream, volcano, starry, osiris, moon" -->
+      <a-entity environment="
+        preset: forest;
+        dressingAmount: 500;
+        dressingColor: #E5EFF5;
+        groundColor: #EEF5FA;
+        groundColor2: #FFFFFF;
+        skyType: gradient;
+        skyColor: #A9CBE3;
+        horizonColor: #F0F5FA;
+      "></a-entity>
+    </a-scene>
+  </body>
+</html>
