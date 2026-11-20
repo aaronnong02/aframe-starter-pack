@@ -1,15 +1,993 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
   <head>
-    <script src="https://aframe.io/releases/1.7.1/aframe.min.js"> </script>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Moonpetal Grove</title>
+    <script src="https://aframe.io/releases/1.7.1/aframe.min.js"></script>
+    <script>
+      AFRAME.registerComponent('sky-haze', {
+        dependencies: ['material'],
+        init() {
+          const material = this.el.components.material.material;
+          // Use the scene's exact fog color at the horizon and reveal the image overhead.
+          material.onBeforeCompile = (shader) => {
+            shader.fragmentShader = shader.fragmentShader.replace('#include <fog_fragment>', `
+              #if defined(USE_FOG) && defined(USE_MAP)
+                float skyVisibility = smoothstep(0.515, 0.605, vMapUv.y);
+                gl_FragColor.rgb = mix(fogColor, gl_FragColor.rgb, skyVisibility);
+              #endif
+            `);
+          };
+          material.needsUpdate = true;
+        }
+      });
+
+      AFRAME.registerGeometry('curved-root', {
+        schema: {
+          length: { default: 2.4, min: 0.5 },
+          radius: { default: 0.45, min: 0.05 },
+          bend: { default: 0.55 },
+          rise: { default: 0.38, min: 0 },
+          moss: { default: 0, min: 0, max: 1 }
+        },
+        init({ length, radius, bend, rise, moss }) {
+          const { Vector3, CatmullRomCurve3, TubeGeometry, Color, Float32BufferAttribute, MathUtils } = AFRAME.THREE;
+          const path = new CatmullRomCurve3([
+            new Vector3(0, rise, 0),
+            new Vector3(bend * 0.25, rise * 0.48, length * 0.28),
+            new Vector3(bend, 0.03, length * 0.66),
+            new Vector3(bend * 0.68, -0.12, length)
+          ]);
+          const rings = 24;
+          const sides = 12;
+          const geometry = new TubeGeometry(path, rings, 1, sides, false);
+          const positions = geometry.getAttribute('position');
+          const vertex = new Vector3();
+          const colors = [];
+          const bark = new Color('#543838');
+          const mossGreen = new Color('#658050');
+          const color = new Color();
+
+          for (let ring = 0; ring <= rings; ring++) {
+            const progress = ring / rings;
+            const center = path.getPointAt(progress);
+            const taper = radius * (0.06 + 0.94 * (1 - progress) ** 1.3);
+            for (let side = 0; side <= sides; side++) {
+              const index = ring * (sides + 1) + side;
+              const ridge = 1 + 0.09 * Math.cos(side * Math.PI / 2 + progress * 2);
+              vertex.fromBufferAttribute(positions, index).sub(center)
+                .multiplyScalar(taper * ridge).add(center);
+              positions.setXYZ(index, vertex.x, vertex.y, vertex.z);
+
+              if (moss > 0) {
+                const angle = 2 * Math.PI * side / sides;
+                const upperSurface = (vertex.y - center.y) / (taper * ridge);
+                const mottling = 0.5 + 0.5 * Math.sin(26 * progress + angle * 2) *
+                  Math.cos(14 * progress - angle * 3);
+                const coverage = moss * MathUtils.smoothstep(upperSurface, 0.12, 0.78) *
+                  MathUtils.smoothstep(mottling, 0.19, 0.72) *
+                  MathUtils.smoothstep(progress, 0.04, 0.22) *
+                  (1 - MathUtils.smoothstep(progress, 0.66, 0.93));
+                color.copy(bark).lerp(mossGreen, coverage);
+                colors.push(color.r, color.g, color.b);
+              }
+            }
+          }
+
+          if (moss > 0) {
+            geometry.setAttribute('color', new Float32BufferAttribute(colors, 3));
+          }
+          geometry.computeVertexNormals();
+          this.geometry = geometry;
+        }
+      });
+
+      AFRAME.registerGeometry('curled-leaf', {
+        schema: {
+          curl: { default: 0.06, min: 0, max: 0.15 },
+          shape: { default: 0, min: -1, max: 1 }
+        },
+        init({ curl, shape }) {
+          const { BufferGeometry, Float32BufferAttribute } = AFRAME.THREE;
+          const positions = [];
+          const colors = [];
+          const triangles = [];
+          const rows = 18;
+          const blade = [-1, -0.55, -0.05, 0, 0.05, 0.55, 1];
+          const shade = [0.73, 0.92, 0.89, 1.19, 0.89, 0.87, 0.66];
+
+          for (let row = 0; row <= rows; row++) {
+            const progress = row / rows;
+            const envelope = Math.sin(Math.PI * progress);
+            const taper = Math.max(0.004, envelope ** (0.85 + shape * 0.18) * (1.16 - 0.43 * progress));
+            for (let column = 0; column < blade.length; column++) {
+              const across = blade[column];
+              const edgeWave = Math.sin(progress * 19 + shape * 2 + across);
+              const edge = 1 + (0.12 * edgeWave + 0.16 * shape * across) * Math.abs(across);
+              const x = 0.43 * taper * across * edge + 0.16 * shape * progress ** 2;
+              const y = 0.009 + curl * progress ** 4 +
+                taper * across ** 4 * (0.018 + 0.014 * edgeWave);
+              const tone = shade[column] * (0.88 + 0.12 * envelope);
+              positions.push(x, y, 1.6 * progress);
+              colors.push(tone, tone, tone);
+
+              if (row > 0 && column > 0) {
+                const current = row * blade.length + column;
+                const above = current - blade.length;
+                triangles.push(above - 1, current - 1, above, above, current - 1, current);
+              }
+            }
+          }
+
+          const geometry = new BufferGeometry();
+          geometry.setAttribute('position', new Float32BufferAttribute(positions, 3));
+          geometry.setAttribute('color', new Float32BufferAttribute(colors, 3));
+          geometry.setIndex(triangles);
+          geometry.computeVertexNormals();
+          this.geometry = geometry;
+        }
+      });
+
+      AFRAME.registerGeometry('moss-patch', {
+        schema: {
+          seed: { default: 0 },
+          height: { default: 0.09, min: 0.02, max: 0.16 }
+        },
+        init({ seed, height }) {
+          const { BufferGeometry, Color, Float32BufferAttribute } = AFRAME.THREE;
+          const outer = new Color('#314a3b');
+          const inner = new Color('#69834c');
+          const color = new Color();
+          const sides = 36;
+          const rings = 9;
+          const positions = [0, 0.006 + height * 0.63, 0];
+          const colors = [inner.r, inner.g, inner.b];
+          const triangles = [];
+
+          for (let ring = 1; ring <= rings; ring++) {
+            const radius = ring / rings;
+            for (let side = 0; side < sides; side++) {
+              const angle = 2 * Math.PI * side / sides;
+              const edge = 0.92 + 0.15 * Math.sin(3 * angle + seed) +
+                0.09 * Math.cos(5 * angle - seed) + 0.06 * Math.sin(9 * angle + 2 * seed);
+              const x = Math.cos(angle) * edge * radius;
+              const z = Math.sin(angle) * edge * radius;
+              const grain = Math.sin(15 * x + 11 * z + seed) * Math.cos(19 * z - 9 * x - seed);
+              const clump = 0.66 + 0.21 * grain + 0.1 * Math.sin(28 * x - 17 * z + seed);
+              const y = 0.006 + height * clump * (1 - radius ** 3);
+              positions.push(x, y, z);
+              color.copy(outer).lerp(inner, (1 - radius ** 4) * (0.62 + 0.29 * grain));
+              colors.push(color.r, color.g, color.b);
+
+              const current = 1 + (ring - 1) * sides + side;
+              const next = 1 + (ring - 1) * sides + (side + 1) % sides;
+              if (ring === 1) {
+                triangles.push(0, next, current);
+              } else {
+                triangles.push(current - sides, next - sides, current, next - sides, next, current);
+              }
+            }
+          }
+
+          const geometry = new BufferGeometry();
+          geometry.setAttribute('position', new Float32BufferAttribute(positions, 3));
+          geometry.setAttribute('color', new Float32BufferAttribute(colors, 3));
+          geometry.setIndex(triangles);
+          geometry.computeVertexNormals();
+          this.geometry = geometry;
+        }
+      });
+
+      AFRAME.registerGeometry('hollow-log', {
+        init() {
+          const { BufferGeometry, Color, Float32BufferAttribute } = AFRAME.THREE;
+          // Follow the cross-section from bark to cut wood and back along the hollow.
+          // Each row gives the distance along the log, radius, and wood color.
+          const profile = [
+            [-1.72, 0.87, '#49322e'],
+            [-1.05, 0.93, '#563b34'],
+            [-0.30, 0.96, '#4b342e'],
+            [0.51, 0.98, '#563a31'],
+            [1.13, 1.01, '#50372f'],
+            [1.70, 1.02, '#4d342c'],
+            [1.75, 0.96, '#684738'],
+            [1.76, 0.93, '#ad7950'],
+            [1.76, 0.896, '#76503b'],
+            [1.76, 0.868, '#b48155'],
+            [1.76, 0.824, '#82593e'],
+            [1.76, 0.793, '#b98556'],
+            [1.75, 0.761, '#8c5d42'],
+            [1.67, 0.728, '#5d3d30'],
+            [1.08, 0.707, '#50352c'],
+            [0.46, 0.666, '#5c3b2c'],
+            [-0.25, 0.616, '#483025'],
+            [-1.02, 0.514, '#3a2824'],
+            [-1.60, 0.396, '#3d2a23'],
+            [-1.71, 0.46, '#60402d'],
+            [-1.74, 0.66, '#785035'],
+            [-1.73, 0.80, '#674335']
+          ];
+          const sides = 56;
+          const positions = [];
+          const colors = [];
+          const triangles = [];
+
+          for (const [ring, [z, radius, tone]] of profile.entries()) {
+            const color = new Color(tone);
+            for (let side = 0; side < sides; side++) {
+              const angle = 2 * Math.PI * side / sides;
+              const ridge = Math.sin(11 * angle - z * 0.6);
+              const outline = 1 + 0.033 * Math.sin(5 * angle + z * 0.45) + 0.037 * ridge;
+              const roughEdge = 0.091 * Math.sin(3 * angle + z * 0.35) +
+                0.045 * Math.cos(8 * angle - z * 0.28);
+              const shade = 0.91 + 0.11 * ridge + 0.07 * Math.cos(17 * angle + z * 0.3);
+              positions.push(
+                Math.cos(angle) * radius * outline,
+                Math.sin(angle) * radius * outline * 0.89,
+                z + roughEdge
+              );
+              colors.push(color.r * shade, color.g * shade, color.b * shade);
+
+              const next = (side + 1) % sides;
+              const nextRing = (ring + 1) % profile.length;
+              const current = ring * sides + side;
+              const beside = ring * sides + next;
+              const ahead = nextRing * sides + side;
+              const diagonal = nextRing * sides + next;
+              triangles.push(current, beside, ahead, beside, diagonal, ahead);
+            }
+          }
+
+          const geometry = new BufferGeometry();
+          geometry.setAttribute('position', new Float32BufferAttribute(positions, 3));
+          geometry.setAttribute('color', new Float32BufferAttribute(colors, 3));
+          geometry.setIndex(triangles);
+          geometry.computeVertexNormals();
+          this.geometry = geometry;
+        }
+      });
+
+      AFRAME.registerComponent('fireflies', {
+        init() {
+          const { AdditiveBlending, CanvasTexture, Group, Sprite, SpriteMaterial, SRGBColorSpace } = AFRAME.THREE;
+          const canvas = document.createElement('canvas');
+          canvas.width = canvas.height = 64;
+          const context = canvas.getContext('2d');
+          const glow = context.createRadialGradient(32, 32, 0, 32, 32, 32);
+          glow.addColorStop(0, '#ffffff');
+          glow.addColorStop(0.11, '#ffffff');
+          glow.addColorStop(0.22, 'rgba(255, 255, 255, 0.63)');
+          glow.addColorStop(0.52, 'rgba(255, 255, 255, 0.13)');
+          glow.addColorStop(1, 'rgba(255, 255, 255, 0)');
+          context.fillStyle = glow;
+          context.fillRect(0, 0, 64, 64);
+          this.texture = new CanvasTexture(canvas);
+          this.texture.colorSpace = SRGBColorSpace;
+
+          // Small pockets near the roots and mushrooms, with dark gaps between them.
+          const centers = [
+            [-0.87, 0.69, 0.63], [-1.65, 1.16, -0.6], [-2.09, 0.83, 0.47],
+            [1.66, 0.79, -2.05], [0.26, 1.22, -4.73], [2.12, 1.5, -4.85],
+            [-1.17, 2.02, -10.64], [-0.27, 1.45, -11.4], [5.86, 1.13, -9.53],
+            [-2.18, 0.75, 5.1], [2.75, 1.25, 6.71], [3.3, 1.76, 7.81]
+          ];
+          const group = new Group();
+          this.flies = centers.map(([x, y, z], index) => {
+            const sprite = new Sprite(new SpriteMaterial({
+              map: this.texture,
+              color: index % 3 === 0 ? '#ffc16c' : '#ffe39a',
+              opacity: 0.18,
+              blending: AdditiveBlending,
+              depthWrite: false
+            }));
+            const size = 0.19 + (index % 4) * 0.045;
+            sprite.scale.set(size, size, 1);
+            sprite.position.set(x, y, z);
+            group.add(sprite);
+
+            return { sprite, x, y, z, phase: index * 2.4, speed: 0.55 + (index % 5) * 0.13 };
+          });
+          this.el.setObject3D('fireflies', group);
+        },
+        tick(time) {
+          const seconds = time / 1000;
+          for (const { sprite, x, y, z, phase, speed } of this.flies) {
+            const angle = seconds * speed + phase;
+            sprite.position.set(
+              x + 0.32 * Math.cos(angle),
+              y + 0.14 * Math.sin(angle * 1.23),
+              z + 0.23 * Math.sin(angle)
+            );
+            const pulse = Math.max(0, Math.sin(seconds * (speed + 0.55) + phase));
+            sprite.material.opacity = 0.16 + 0.78 * pulse ** 5;
+          }
+        },
+        remove() {
+          this.el.removeObject3D('fireflies');
+          for (const { sprite } of this.flies) {
+            sprite.material.dispose();
+          }
+          this.texture.dispose();
+        }
+      });
+
+      let breezeEnabled = true;
+      AFRAME.registerComponent('breeze', {
+        dependencies: ['rotation'],
+        schema: {
+          degrees: { default: 2.2 },
+          period: { default: 8.4 },
+          phase: { default: 0 }
+        },
+        init() {
+          this.rest = this.el.object3D.rotation.clone();
+          this.weight = 1;
+        },
+        tick(time, delta) {
+          const { degrees, period, phase } = this.data;
+          const rotation = this.el.object3D.rotation;
+          const angle = time * 2 * Math.PI / (period * 1000) + phase;
+          const target = breezeEnabled ? 1 : 0;
+          this.weight += (target - this.weight) * Math.min((delta || 0) / 420, 1);
+          if (Math.abs(target - this.weight) < 0.001) {
+            this.weight = target;
+          }
+          const gust = 0.83 + 0.15 * Math.sin(time / 2400 + phase * 0.5);
+          const amount = this.weight * gust * degrees * Math.PI / 180;
+          rotation.z = this.rest.z + amount * Math.sin(angle);
+          rotation.x = this.rest.x + amount * 0.42 * Math.sin(angle * 0.76 + phase);
+        }
+      });
+    </script>
+    <style>
+      #breeze-toggle {
+        position: fixed;
+        inset: 1rem auto auto 1rem;
+        z-index: 10;
+        padding: 0.55rem 0.85rem;
+        border: 1px solid #77705d;
+        border-radius: 0.5rem;
+        background: #17252a;
+        color: #fff3d5;
+        font: 600 0.92rem system-ui, sans-serif;
+        cursor: pointer;
+      }
+
+      #breeze-toggle:focus-visible {
+        outline: 2px solid #ffe1a2;
+        outline-offset: 3px;
+      }
+    </style>
   </head>
   <body>
-    <a-scene>
-      <a-box position="-1 0.5 -3" rotation="0 45 0" color="#4CC3D9"></a-box>
-      <a-sphere position="0 1.25 -5" radius="1.25" color="#EF2D5E"></a-sphere>
-      <a-cylinder position="1 0.75 -3" radius="0.5" height="1.5" color="#FFC65D"></a-cylinder>
-      <a-plane position="0 0 -4" rotation="-90 0 0" width="4" height="4" color="#7BC8A4"></a-plane>
-      <a-sky color="#ECECEC"></a-sky>
+    <a-scene fog="type: exponential; color: #1b293c; density: 0.048">
+      <!-- 1. Wrap the 2:1 night image around the scene. -->
+      <a-assets>
+        <img id="night-sky" src="./images/night-sky.png" alt="">
+        <img id="bark-texture" src="./images/bark-texture.png" alt="">
+        <img id="soil-texture" src="./images/soil-texture.png" alt="">
+        <img id="mushroom-gill-texture" src="./images/mushroom-gills.png" alt="">
+        <a-mixin id="bark" material="color: #543838; roughness: 1"></a-mixin>
+        <a-mixin id="trunk-bark" material="color: #5c3f3d; src: #bark-texture; repeat: 1 2; anisotropy: 4; roughness: 1"></a-mixin>
+        <a-mixin id="canopy" material="color: #284c45; roughness: 1"></a-mixin>
+        <a-mixin id="stem" material="color: #427b63; roughness: 0.9"></a-mixin>
+        <a-mixin id="petal" material="color: #eaa4c5; emissive: #a94072; emissiveIntensity: 0.55; roughness: 0.8"></a-mixin>
+        <a-mixin id="pollen" material="color: #fff0ad; emissive: #ffb751; emissiveIntensity: 0.9"></a-mixin>
+        <a-mixin id="bud" material="color: #83e2cb; emissive: #46b69c; emissiveIntensity: 0.65"></a-mixin>
+        <a-mixin id="understory-leaf" geometry="primitive: sphere; segmentsWidth: 16; segmentsHeight: 10"
+          material="color: #3e7059; roughness: 0.9"></a-mixin>
+        <a-mixin id="mushroom-stalk" material="color: #ddc7ae; roughness: 0.95"></a-mixin>
+        <a-mixin id="red-gills" geometry="primitive: circle; radius: 0.631; segments: 48"
+          position="0 0.677 0" rotation="90 0 0"
+          material="color: #efd4ae; src: #mushroom-gill-texture; emissive: #a16443; emissiveMap: #mushroom-gill-texture; emissiveIntensity: 0.25; roughness: 1"></a-mixin>
+        <a-mixin id="amber-gills" geometry="primitive: circle; radius: 0.713; segments: 48"
+          position="0 0.836 0" rotation="90 0 0"
+          material="color: #e0a56d; src: #mushroom-gill-texture; emissive: #bb7238; emissiveMap: #mushroom-gill-texture; emissiveIntensity: 0.42; roughness: 1"></a-mixin>
+        <a-mixin id="plum-gills" geometry="primitive: circle; radius: 0.528; segments: 48"
+          position="0 0.541 0" rotation="90 0 0"
+          material="color: #c9a5cc; src: #mushroom-gill-texture; emissive: #866294; emissiveMap: #mushroom-gill-texture; emissiveIntensity: 0.4; roughness: 1"></a-mixin>
+        <a-mixin id="mushroom-spot" geometry="primitive: sphere; segmentsWidth: 12; segmentsHeight: 8"
+          material="color: #fff5e6; emissive: #b6a89a; emissiveIntensity: 0.15; roughness: 0.95"></a-mixin>
+        <a-mixin id="fallen-leaf" geometry="primitive: curled-leaf"
+          material="side: double; vertexColorsEnabled: true; roughness: 1"></a-mixin>
+        <a-mixin id="ground-moss" geometry="primitive: moss-patch"
+          material="vertexColorsEnabled: true; roughness: 1"></a-mixin>
+        <a-mixin id="mossy-bark" material="color: #ffffff; vertexColorsEnabled: true; roughness: 1"></a-mixin>
+      </a-assets>
+      <a-sky src="#night-sky" material="fog: true" sky-haze></a-sky>
+
+      <a-plane rotation="-90 0 0" width="400" height="400"
+        material="color: #2a433c; src: #soil-texture; repeat: 144 144; anisotropy: 8; roughness: 1"></a-plane>
+
+      <!-- 2. Build a giant tree from a tapered trunk, branches, and round crowns. -->
+      <a-entity id="giant-tree" position="-4.8 0 -7" scale="1.85 2.25 1.85">
+        <a-cone mixin="trunk-bark" position="0 3 0" height="6"
+          radius-bottom="0.78" radius-top="0.28"></a-cone>
+        <a-sphere mixin="bark" position="0.47 0.18 0.33" radius="0.65"
+          rotation="0 37 0" scale="1.8 0.46 0.5"></a-sphere>
+        <a-sphere mixin="bark" position="-0.42 0.16 0.27" radius="0.62"
+          rotation="0 -25 0" scale="1.6 0.44 0.5"></a-sphere>
+        <a-cone mixin="trunk-bark" position="-0.66 4.5 0" rotation="0 0 38"
+          height="2.85" radius-bottom="0.34" radius-top="0.12"></a-cone>
+        <a-cone mixin="trunk-bark" position="0.75 4.8 -0.05" rotation="0 0 -40"
+          height="2.9" radius-bottom="0.3" radius-top="0.11"></a-cone>
+        <a-sphere mixin="canopy" position="-1.28 5.8 0.05" radius="1.55" scale="1.15 0.75 1"></a-sphere>
+        <a-sphere mixin="canopy" position="1.35 6 -0.3" radius="1.63" scale="1.15 0.8 1"></a-sphere>
+        <a-sphere position="0 6.65 0" radius="1.9" scale="1.12 0.83 1"
+          material="color: #365d50; roughness: 1"></a-sphere>
+      </a-entity>
+
+      <!-- Stagger trunks around the viewer and across gaps in the undergrowth. -->
+      <a-entity id="background-trees" scale="1 2.05 1">
+        <a-cone mixin="trunk-bark" position="-8 3.1 -11" height="6.2" radius-bottom="0.6" radius-top="0.27"></a-cone>
+        <a-sphere mixin="canopy" position="-8 6.1 -11" radius="2.3" scale="1.6 0.8 1.45"></a-sphere>
+        <a-cone mixin="trunk-bark" position="-4.1 3.8 -17" height="7.6" radius-bottom="0.88" radius-top="0.3"></a-cone>
+        <a-sphere mixin="canopy" position="-4.1 7.5 -17" radius="2.4" scale="1.75 0.8 1.5"></a-sphere>
+        <a-cone mixin="trunk-bark" position="4.1 3.4 -20" height="6.8" radius-bottom="0.8" radius-top="0.25"></a-cone>
+        <a-sphere mixin="canopy" position="4.1 6.7 -20" radius="2.5" scale="1.8 0.8 1.55"></a-sphere>
+        <a-cone mixin="trunk-bark" position="5.6 4 -15" height="8" radius-bottom="0.75" radius-top="0.3"></a-cone>
+        <a-sphere mixin="canopy" position="5.6 7.7 -15" radius="2.9" scale="1.5 0.68 1.4"></a-sphere>
+        <a-cone mixin="trunk-bark" position="8.1 3.3 -7.5" height="6.6" radius-bottom="0.62" radius-top="0.22"></a-cone>
+        <a-sphere mixin="canopy" position="8.1 6.45 -7.5" radius="2.2" scale="1.7 0.82 1.4"></a-sphere>
+        <a-cone mixin="trunk-bark" position="4.9 3.6 -1" height="7.2" radius-bottom="1.13" radius-top="0.38"></a-cone>
+        <a-sphere mixin="canopy" position="4.9 6.95 -1" radius="2.5" scale="1.8 0.82 1.45"></a-sphere>
+        <a-cone mixin="trunk-bark" position="-5.2 3.25 4" height="6.5" radius-bottom="1" radius-top="0.29"></a-cone>
+        <a-sphere mixin="canopy" position="-5.2 6.2 4" radius="2.3" scale="1.8 0.82 1.45"></a-sphere>
+        <a-cone mixin="trunk-bark" position="-7.7 3.45 -1.5" height="6.9" radius-bottom="0.87" radius-top="0.31"></a-cone>
+        <a-sphere mixin="canopy" position="-7.7 6.7 -1.5" radius="2.4" scale="1.55 0.82 1.5"></a-sphere>
+        <a-cone mixin="trunk-bark" position="4.0 3.5 -9.9" height="7" radius-bottom="0.95" radius-top="0.32"></a-cone>
+        <a-sphere mixin="canopy" position="4.0 6.9 -9.9" radius="2.55" scale="1.72 0.82 1.48"></a-sphere>
+        <a-cone mixin="trunk-bark" position="-4 3.35 -11.7" height="6.7" radius-bottom="0.8" radius-top="0.27"></a-cone>
+        <a-sphere mixin="canopy" position="-4 6.45 -11.7" radius="2.45" scale="1.76 0.82 1.5"></a-sphere>
+        <a-cone mixin="trunk-bark" position="-10.1 3.6 -17.4" height="7.2" radius-bottom="1" radius-top="0.3"></a-cone>
+        <a-sphere mixin="canopy" position="-10.1 6.9 -17.4" radius="2.6" scale="1.6 0.8 1.5"></a-sphere>
+        <a-cone mixin="trunk-bark" position="9.8 3.4 -19.5" height="6.8" radius-bottom="0.94" radius-top="0.29"></a-cone>
+        <a-sphere mixin="canopy" position="9.8 6.5 -19.5" radius="2.55" scale="1.6 0.8 1.4"></a-sphere>
+        <a-cone mixin="trunk-bark" position="-5.5 3.6 -24.2" height="7.2" radius-bottom="0.97" radius-top="0.28"></a-cone>
+        <a-sphere mixin="canopy" position="-5.5 7 -24.2" radius="2.55" scale="1.72 0.8 1.5"></a-sphere>
+        <a-cone mixin="trunk-bark" position="5 3.45 -27" height="6.9" radius-bottom="0.9" radius-top="0.3"></a-cone>
+        <a-sphere mixin="canopy" position="5 6.6 -27" radius="2.6" scale="1.75 0.8 1.5"></a-sphere>
+        <a-cone mixin="trunk-bark" position="-1.1 3.65 -32" height="7.3" radius-bottom="0.85" radius-top="0.3"></a-cone>
+        <a-sphere mixin="canopy" position="-1.1 7.1 -32" radius="2.55" scale="1.7 0.8 1.5"></a-sphere>
+        <a-cone mixin="trunk-bark" position="0.9 3.65 -9.4" height="7.3" radius-bottom="1.05" radius-top="0.32"></a-cone>
+        <a-sphere mixin="canopy" position="0.9 7.05 -9.4" radius="2.6" scale="1.55 0.8 1.4"></a-sphere>
+        <a-cone mixin="trunk-bark" position="-1.8 3.2 -20.1" height="6.4" radius-bottom="0.9" radius-top="0.33"></a-cone>
+        <a-sphere mixin="canopy" position="-1.8 6.3 -20.1" radius="2.35" scale="1.7 0.8 1.5"></a-sphere>
+        <a-cone mixin="trunk-bark" position="6.5 3.7 5.8" height="7.4" radius-bottom="1.05" radius-top="0.34"></a-cone>
+        <a-sphere mixin="canopy" position="6.5 7.25 5.8" radius="2.6" scale="1.68 0.83 1.5"></a-sphere>
+        <a-cone mixin="trunk-bark" position="1.1 3.25 9.3" height="6.5" radius-bottom="1.2" radius-top="0.34"></a-cone>
+        <a-sphere mixin="canopy" position="1.1 6.3 9.3" radius="2.55" scale="1.7 0.81 1.45"></a-sphere>
+        <a-cone mixin="trunk-bark" position="-6.3 3.55 10.8" height="7.1" radius-bottom="0.98" radius-top="0.31"></a-cone>
+        <a-sphere mixin="canopy" position="-6.3 6.9 10.8" radius="2.6" scale="1.65 0.8 1.45"></a-sphere>
+        <a-cone mixin="trunk-bark" position="-2.6 3.8 16.2" height="7.6" radius-bottom="1.15" radius-top="0.35"></a-cone>
+        <a-sphere mixin="canopy" position="-2.6 7.45 16.2" radius="2.65" scale="1.7 0.8 1.52"></a-sphere>
+        <a-cone mixin="trunk-bark" position="6.2 3.5 14.8" height="7" radius-bottom="0.96" radius-top="0.29"></a-cone>
+        <a-sphere mixin="canopy" position="6.2 6.8 14.8" radius="2.48" scale="1.75 0.82 1.5"></a-sphere>
+        <a-cone mixin="trunk-bark" position="11.2 3.35 2.5" height="6.7" radius-bottom="0.88" radius-top="0.3"></a-cone>
+        <a-sphere mixin="canopy" position="11.2 6.55 2.5" radius="2.5" scale="1.55 0.8 1.48"></a-sphere>
+        <a-cone mixin="trunk-bark" position="-11.4 3.5 3.8" height="7" radius-bottom="0.94" radius-top="0.33"></a-cone>
+        <a-sphere mixin="canopy" position="-11.4 6.85 3.8" radius="2.55" scale="1.62 0.8 1.45"></a-sphere>
+      </a-entity>
+
+      <a-entity id="forest-layers"></a-entity>
+
+      <!-- 3. Tilt the flower heads down toward the ground-level viewpoint. -->
+      <a-entity id="giant-flower" position="3.3 0 -8.2" rotation="0 -18 0" scale="2.05 2.15 2.05">
+        <a-cylinder mixin="stem" position="0 1.45 0" height="2.9" radius="0.115"></a-cylinder>
+        <a-sphere mixin="stem" position="-0.39 0.87 0.07" rotation="0 0 -29"
+          radius="0.62" scale="1 0.25 0.53"></a-sphere>
+        <a-sphere mixin="stem" position="0.39 1.42 0.04" rotation="0 0 33"
+          radius="0.59" scale="1 0.25 0.53"></a-sphere>
+        <a-entity position="0 2.95 0" rotation="19 0 8">
+          <a-sphere mixin="petal" position="0 0.74 0.08" scale="0.41 0.7 0.2"></a-sphere>
+          <a-sphere mixin="petal" position="0.64 0.37 0.08" rotation="0 0 -60" scale="0.41 0.7 0.2"></a-sphere>
+          <a-sphere mixin="petal" position="0.64 -0.37 0.08" rotation="0 0 -120" scale="0.41 0.7 0.2"></a-sphere>
+          <a-sphere mixin="petal" position="0 -0.74 0.08" scale="0.41 0.7 0.2"></a-sphere>
+          <a-sphere mixin="petal" position="-0.64 -0.37 0.08" rotation="0 0 120" scale="0.41 0.7 0.2"></a-sphere>
+          <a-sphere mixin="petal" position="-0.64 0.37 0.08" rotation="0 0 60" scale="0.41 0.7 0.2"></a-sphere>
+          <a-sphere mixin="pollen" position="0 0 0.28" radius="0.42" scale="1 1 0.58"></a-sphere>
+        </a-entity>
+      </a-entity>
+
+      <a-entity id="lavender-flower" position="-6.5 0 -8.5" rotation="0 27 0" scale="1.85 2.15 1.85">
+        <a-cylinder mixin="stem" position="0 1.12 0" height="2.24" radius="0.08"></a-cylinder>
+        <a-sphere mixin="stem" position="0.3 0.86 0.04" rotation="0 0 28"
+          scale="0.49 0.12 0.22"></a-sphere>
+        <a-entity position="0 2.25 0" rotation="22 0 -10">
+          <a-sphere mixin="petal" material="color: #ad9bea; emissive: #635392" position="0 0.47 0.06" scale="0.28 0.53 0.14"></a-sphere>
+          <a-sphere mixin="petal" material="color: #ad9bea; emissive: #635392" position="0.45 0.15 0.06" rotation="0 0 -72" scale="0.28 0.53 0.14"></a-sphere>
+          <a-sphere mixin="petal" material="color: #ad9bea; emissive: #635392" position="0.28 -0.38 0.06" rotation="0 0 -144" scale="0.28 0.53 0.14"></a-sphere>
+          <a-sphere mixin="petal" material="color: #ad9bea; emissive: #635392" position="-0.28 -0.38 0.06" rotation="0 0 144" scale="0.28 0.53 0.14"></a-sphere>
+          <a-sphere mixin="petal" material="color: #ad9bea; emissive: #635392" position="-0.45 0.15 0.06" rotation="0 0 72" scale="0.28 0.53 0.14"></a-sphere>
+          <a-sphere mixin="pollen" position="0 0 0.2" radius="0.26" scale="1 1 0.62"></a-sphere>
+        </a-entity>
+      </a-entity>
+
+      <!-- The other blooms appear between trunks as the player explores. -->
+      <a-entity data-flower="lavender-flower" data-petals="blue"
+        position="7 0 -1.1" rotation="0 -56 0" scale="1.32 1.5 1.32"></a-entity>
+      <a-entity data-flower="lavender-flower" data-petals="blue"
+        position="8 0 11.3" rotation="0 -134 0" scale="1.35 1.52 1.35"></a-entity>
+      <a-entity data-flower="giant-flower" data-petals="apricot"
+        position="-4 0 11.9" rotation="0 152 0" scale="1.24 1.32 1.24"></a-entity>
+      <a-entity data-flower="giant-flower" data-petals="apricot"
+        position="10.6 0 -8.4" rotation="0 -48 0" scale="1.36 1.42 1.36"></a-entity>
+      <a-entity data-flower="giant-flower" data-petals="magenta"
+        position="-8.6 0 -8" rotation="0 44 0" scale="1.32 1.65 1.32"></a-entity>
+      <a-entity data-flower="giant-flower" data-petals="magenta"
+        position="-5.3 0 6.6" rotation="0 112 0" scale="1.18 1.37 1.18"></a-entity>
+      <a-entity data-flower="lavender-flower" position="-9.4 0 1.7" rotation="0 76 0" scale="1.19 1.31 1.19"></a-entity>
+      <a-entity data-flower="lavender-flower" position="2.8 0 15" rotation="0 -156 0" scale="1.76 1.89 1.76"></a-entity>
+      <a-entity data-flower="giant-flower" position="-0.8 0 -15.25" rotation="0 -9 0" scale="1.36 1.55 1.36"></a-entity>
+      <a-entity data-flower="giant-flower" position="1.9 0 17.6" rotation="0 -169 0" scale="1.61 1.86 1.61"></a-entity>
+
+      <!-- Low leaves fan out from the tops of short stalks. -->
+      <a-cylinder mixin="stem" position="-2.52 0.275 0.4" radius="0.045" height="0.55"></a-cylinder>
+      <a-entity position="-2.52 0.55 0.4" breeze="degrees: 2.4; period: 7.8; phase: 0.4">
+        <a-entity mixin="understory-leaf" position="-0.60 0.14 0.35" rotation="0 30 -12" scale="1.35 0.12 0.42"></a-entity>
+        <a-entity mixin="understory-leaf" position="0.60 0.17 -0.33" rotation="0 29 14" scale="1.05 0.11 0.38"></a-entity>
+      </a-entity>
+      <a-cylinder mixin="stem" position="1.78 0.29 -0.85" radius="0.045" height="0.58"></a-cylinder>
+      <a-entity position="1.78 0.58 -0.85" breeze="degrees: 2.6; period: 7.1; phase: 2.1">
+        <a-entity mixin="understory-leaf" position="0.68 0.19 -0.30" rotation="0 24 15" scale="1.3 0.12 0.41"></a-entity>
+        <a-entity mixin="understory-leaf" position="-0.52 0.21 0.29" rotation="0 29 -19" scale="1.04 0.11 0.34"></a-entity>
+      </a-entity>
+      <a-cylinder mixin="stem" position="0.15 0.28 -6" radius="0.045" height="0.56"></a-cylinder>
+      <a-entity mixin="understory-leaf" position="0.15 0.55 -6" rotation="0 31 13" scale="1.2 0.12 0.39"></a-entity>
+      <a-cylinder mixin="stem" position="2.1 0.265 5.32" radius="0.055" height="0.53"></a-cylinder>
+      <a-entity position="2.1 0.53 5.32" breeze="degrees: 2.3; period: 8.9; phase: 3.25">
+        <a-entity mixin="understory-leaf" position="-0.65 0.21 0.30" rotation="0 25 -16" scale="1.27 0.14 0.45"></a-entity>
+        <a-entity mixin="understory-leaf" position="0.50 0.14 0.48" rotation="0 -43 12" scale="0.97 0.1 0.4"></a-entity>
+      </a-entity>
+      <a-entity id="forest-leaves" position="-1.95 0 3.57" rotation="0 188 0" scale="0.86 0.97 0.86">
+        <a-cylinder mixin="stem" position="0 0.25 0" radius="0.06" height="0.5"></a-cylinder>
+        <a-entity data-leaf-fan position="0 0.5 0">
+          <a-entity mixin="understory-leaf" position="-0.62 0.23 0" rotation="0 5 -20" scale="0.91 0.115 0.3"></a-entity>
+          <a-entity mixin="understory-leaf" position="0.68 0.22 0.08" rotation="0 -7 18" scale="0.92 0.11 0.32"></a-entity>
+          <a-entity mixin="understory-leaf" position="0.04 0.21 -0.55" rotation="0 85 21" scale="0.74 0.1 0.29"></a-entity>
+        </a-entity>
+      </a-entity>
+      <a-entity data-copy="forest-leaves" position="3.3 0 2.7" rotation="0 9 0" scale="1.3 1.15 1.3"></a-entity>
+      <a-entity data-copy="forest-leaves" position="0.8 0 0.25" rotation="0 -53 0" scale="0.72 0.65 0.72"></a-entity>
+      <a-entity data-copy="forest-leaves" position="-0.45 0 6.25" rotation="0 -15 0" scale="1 0.89 1"></a-entity>
+      <a-entity data-copy="forest-leaves" data-sheltered position="-3.7 0 5.86" rotation="0 160 0" scale="1 1.07 1"></a-entity>
+      <a-entity data-copy="forest-leaves" data-sheltered position="5.4 0 6.93" rotation="0 120 0" scale="1.3 1.2 1.3"></a-entity>
+      <a-entity data-copy="forest-leaves" position="-4.6 0 -3.55" rotation="0 25 0" scale="1.5 1.25 1.5"></a-entity>
+      <a-entity data-copy="forest-leaves" position="3.1 0 -6.5" rotation="0 52 0" scale="1.25 1.1 1.25"></a-entity>
+
+      <!-- 4. Scatter patches of light across the forest floor. -->
+      <a-entity id="glowing-buds" position="-1.3 0 -0.8" rotation="0 40 0" scale="1.2 1.2 1.2">
+        <a-cylinder mixin="stem" position="0 0.34 0" radius="0.035" height="0.68"></a-cylinder>
+        <a-sphere mixin="bud" position="0 0.74 0" radius="0.17" scale="0.9 1.25 0.9"></a-sphere>
+        <a-cylinder mixin="stem" position="-0.28 0.22 0.16" radius="0.03" height="0.44"></a-cylinder>
+        <a-sphere mixin="bud" position="-0.28 0.49 0.16" radius="0.13"></a-sphere>
+        <a-cylinder mixin="stem" position="0.28 0.22 -0.15" radius="0.025" height="0.44"></a-cylinder>
+        <a-sphere mixin="bud" position="0.28 0.49 -0.15" radius="0.11"></a-sphere>
+      </a-entity>
+      <a-entity position="2.35 0 -8.7" scale="1.3 1.3 1.3">
+        <a-cylinder mixin="stem" position="0 0.43 0" radius="0.04" height="0.86"></a-cylinder>
+        <a-sphere mixin="bud" position="0 0.93 0" radius="0.17"></a-sphere>
+        <a-cylinder mixin="stem" position="0.37 0.29 0.12" radius="0.03" height="0.58"></a-cylinder>
+        <a-sphere mixin="bud" position="0.37 0.64 0.12" radius="0.14"></a-sphere>
+        <a-cylinder mixin="stem" position="-0.35 0.24 0.02" radius="0.03" height="0.48"></a-cylinder>
+        <a-sphere mixin="bud" position="-0.35 0.53 0.02" radius="0.135"></a-sphere>
+        <a-light type="point" position="0 0.72 0.22" color="#82e8cc" intensity="2.8" distance="4"></a-light>
+      </a-entity>
+
+      <a-entity position="-5.1 0 -10.3">
+        <a-cylinder mixin="stem" position="0 0.34 0" radius="0.035" height="0.68"></a-cylinder>
+        <a-sphere mixin="bud" position="0 0.76 0" radius="0.16"></a-sphere>
+        <a-cylinder mixin="stem" position="-0.25 0.22 -0.23" radius="0.026" height="0.44"></a-cylinder>
+        <a-sphere mixin="bud" position="-0.25 0.49 -0.23" radius="0.11"></a-sphere>
+        <a-light type="point" position="0 0.65 0.17" color="#82e8cc" intensity="2.6" distance="3.5"></a-light>
+      </a-entity>
+      <a-entity position="-1.1 0 -18.6">
+        <a-cylinder mixin="stem" position="0 0.32 0" radius="0.033" height="0.64"></a-cylinder>
+        <a-sphere mixin="bud" position="0 0.7 0" radius="0.16"></a-sphere>
+        <a-light type="point" position="0 0.59 0.17" color="#82e8cc" intensity="2.6" distance="3.5"></a-light>
+      </a-entity>
+      <a-entity data-copy="glowing-buds" position="2.55 0 6.7" rotation="0 150 0" scale="1.3 1.3 1.3"></a-entity>
+      <a-entity data-copy="glowing-buds" position="-2.65 0 4.9" rotation="0 -135 0" scale="0.98 0.98 0.98"></a-entity>
+      <a-entity data-copy="glowing-buds" position="-3.3 0 11.5" rotation="0 -80 0" scale="1.35 1.35 1.35"></a-entity>
+      <a-entity data-copy="glowing-buds" position="4.4 0 1.9" rotation="0 98 0" scale="0.95 0.95 0.95"></a-entity>
+
+      <!-- 5. Scatter mushroom clusters from the starting pocket into the distant grove. -->
+      <a-entity id="red-mushroom" data-gills="red-gills" position="1.15 0 -3.3" rotation="0 -12 0" scale="0.95 0.95 0.95">
+        <a-cone mixin="mushroom-stalk" position="0 0.37 0" height="0.74"
+          radius-bottom="0.16" radius-top="0.11" segments-radial="14"></a-cone>
+        <a-cylinder position="0 0.707 0" height="0.055" radius="0.638" segments-radial="24"
+          material="color: #efd4ae; emissive: #a16443; emissiveIntensity: 0.25; roughness: 1"></a-cylinder>
+        <a-sphere position="0 0.73 0" radius="0.64" scale="1 0.68 1" theta-length="90"
+          segments-width="24" segments-height="12"
+          material="color: #e84646; emissive: #7c1720; emissiveIntensity: 0.28; roughness: 0.78"></a-sphere>
+        <a-entity mixin="mushroom-spot" position="-0.312 0.977 0.433" rotation="39 0 24" scale="0.092 0.021 0.068"></a-entity>
+        <a-entity mixin="mushroom-spot" position="0.04 0.976 0.534" rotation="45 0 -3" scale="0.103 0.021 0.076"></a-entity>
+        <a-entity mixin="mushroom-spot" position="0.362 0.997 0.362" rotation="32 0 -28" scale="0.08 0.021 0.066"></a-entity>
+        <a-entity mixin="mushroom-spot" position="-0.483 1.003 0.151" rotation="14 0 39" scale="0.074 0.021 0.054"></a-entity>
+        <a-entity mixin="mushroom-spot" position="0.473 1.026 -0.07" rotation="-6 0 -37" scale="0.086 0.021 0.073"></a-entity>
+        <a-entity mixin="mushroom-spot" position="0.191 0.999 -0.473" rotation="-39 0 -14" scale="0.095 0.021 0.07"></a-entity>
+        <a-entity mixin="mushroom-spot" position="-0.403 1 -0.312" rotation="-28 0 31" scale="0.09 0.021 0.064"></a-entity>
+        <a-entity mixin="mushroom-spot" position="-0.07 0.951 -0.554" rotation="-49 0 6" scale="0.075 0.021 0.057"></a-entity>
+        <a-entity mixin="mushroom-spot" position="-0.101 1.145 0.191" rotation="12 0 6" scale="0.072 0.021 0.06"></a-entity>
+        <a-entity mixin="mushroom-spot" position="0.231 1.138 0.07" rotation="5 0 -15" scale="0.062 0.021 0.048"></a-entity>
+      </a-entity>
+      <a-entity id="amber-mushroom" data-gills="amber-gills" position="-1.25 0 -11.55" rotation="0 24 0" scale="2.65 2.65 2.65">
+        <a-cone mixin="mushroom-stalk" position="0 0.46 0" height="0.92"
+          radius-bottom="0.19" radius-top="0.125" segments-radial="14"></a-cone>
+        <a-cylinder position="0 0.879 0" height="0.081" radius="0.72" segments-radial="24"
+          material="color: #e0a56d; emissive: #bb7238; emissiveIntensity: 0.42; roughness: 1"></a-cylinder>
+        <a-sphere position="0 0.914 0" radius="0.73" scale="1 0.61 1" theta-length="90"
+          segments-width="24" segments-height="12"
+          material="color: #c5854e; emissive: #784425; emissiveIntensity: 0.24; roughness: 0.88"></a-sphere>
+      </a-entity>
+      <a-entity id="plum-mushroom" position="-2.5 0 6.1" rotation="0 14 0" scale="0.68 0.68 0.68">
+        <a-cone mixin="mushroom-stalk" position="0 0.31 0" height="0.62"
+          radius-bottom="0.13" radius-top="0.085" segments-radial="14"></a-cone>
+        <a-cylinder position="0 0.576 0" height="0.065" radius="0.535" segments-radial="20"
+          material="color: #c9a5cc; emissive: #866294; emissiveIntensity: 0.4; roughness: 1"></a-cylinder>
+        <a-sphere position="0 0.607 0" radius="0.55" scale="1 0.78 1" theta-length="90"
+          segments-width="20" segments-height="12"
+          material="color: #855779; emissive: #5a284e; emissiveIntensity: 0.26; roughness: 0.9"></a-sphere>
+      </a-entity>
+
+      <a-entity data-copy="red-mushroom" position="-0.59 0 1.78" rotation="0 17 0" scale="0.31 0.31 0.31"></a-entity>
+      <a-entity data-copy="red-mushroom" position="-0.28 0 1.54" rotation="0 63 0" scale="0.2 0.2 0.2"></a-entity>
+      <a-entity data-copy="amber-mushroom" position="-0.93 0 1.37" rotation="0 33 0" scale="0.205 0.205 0.205"></a-entity>
+      <a-entity data-copy="plum-mushroom" position="0.72 0 1.55" rotation="0 -36 0" scale="0.36 0.36 0.36"></a-entity>
+      <a-entity data-copy="plum-mushroom" position="1.04 0 1.79" rotation="0 28 0" scale="0.21 0.21 0.21"></a-entity>
+      <a-entity data-copy="amber-mushroom" data-gills="amber-gills" position="-1.5 0 -2.85" rotation="0 17 0" scale="0.78 0.78 0.78"></a-entity>
+      <a-entity data-copy="red-mushroom" position="1.89 0 -3.12" rotation="0 132 0" scale="0.33 0.33 0.33"></a-entity>
+      <a-entity data-copy="plum-mushroom" position="0.3 0 -5.15" rotation="0 -39 0" scale="0.63 0.63 0.63"></a-entity>
+      <a-entity data-copy="red-mushroom" position="-1.84 0 6.18" rotation="0 149 0" scale="0.38 0.38 0.38"></a-entity>
+      <a-entity data-copy="amber-mushroom" position="5.23 0 4.55" rotation="0 61 0" scale="0.64 0.64 0.64"></a-entity>
+      <a-entity data-copy="red-mushroom" data-gills="red-gills" position="6.45 0 -10.9" rotation="0 -32 0" scale="2.35 2.35 2.35"></a-entity>
+      <a-entity data-copy="red-mushroom" data-gills="red-gills" position="2.95 0 7.35" rotation="0 -143 0" scale="2 2 2"></a-entity>
+      <a-entity data-copy="plum-mushroom" data-gills="plum-gills" position="-6.6 0 -18.9" rotation="0 97 0" scale="3.1 3.1 3.1"></a-entity>
+      <a-light type="point" color="#f4a766" intensity="3.5" distance="3.6" position="-1.25 2.11 -11.55"></a-light>
+
+      <!-- 6. Root systems and patches of leaf litter along the forest floor. -->
+      <a-entity id="forest-floor">
+        <a-entity mixin="mossy-bark" position="-2.45 0 -1.3" rotation="0 21 0"
+          geometry="primitive: curved-root; length: 2.8; radius: 0.58; bend: 0.48; moss: 0.92"></a-entity>
+        <a-entity mixin="bark" position="-2.06 0 -0.61" rotation="0 70 0"
+          geometry="primitive: curved-root; length: 1.78; radius: 0.27; bend: -0.3; rise: 0.18"></a-entity>
+        <a-entity mixin="bark" position="-2.45 0 -1.3" rotation="0 148 0"
+          geometry="primitive: curved-root; length: 2.5; radius: 0.49; bend: -0.68"></a-entity>
+        <a-entity mixin="bark" position="-2.45 0 -1.3" rotation="0 -70 0"
+          geometry="primitive: curved-root; length: 2.3; radius: 0.35; bend: 0.48"></a-entity>
+
+        <a-entity mixin="mossy-bark" position="2.4 0 0.5" rotation="0 -32 0"
+          geometry="primitive: curved-root; length: 2.06; radius: 0.48; bend: 0.36; moss: 0.73"></a-entity>
+        <a-entity mixin="bark" position="2.17 0 1.04" rotation="0 -81 0"
+          geometry="primitive: curved-root; length: 1.55; radius: 0.24; bend: 0.36; rise: 0.18"></a-entity>
+        <a-entity mixin="bark" position="2.4 0 0.5" rotation="0 -123 0"
+          geometry="primitive: curved-root; length: 2.33; radius: 0.42; bend: -0.42"></a-entity>
+        <a-entity mixin="bark" position="2.4 0 0.5" rotation="0 68 0"
+          geometry="primitive: curved-root; length: 2.2; radius: 0.47; bend: -0.6"></a-entity>
+
+        <a-entity mixin="bark" position="-3.1 0 4.8" rotation="0 110 0"
+          geometry="primitive: curved-root; length: 2.15; radius: 0.49; bend: -0.53"></a-entity>
+        <a-entity mixin="bark" position="-2.49 0 4.72" rotation="0 72 0"
+          geometry="primitive: curved-root; length: 1.62; radius: 0.26; bend: 0.70; rise: 0.18"></a-entity>
+        <a-entity mixin="bark" position="-3.1 0 4.8" rotation="0 -33 0"
+          geometry="primitive: curved-root; length: 2.2; radius: 0.51; bend: 0.46"></a-entity>
+
+        <a-entity mixin="mossy-bark" position="3.65 0 4.55" rotation="0 -114 0"
+          geometry="primitive: curved-root; length: 2.22; radius: 0.55; bend: 0.50; moss: 0.85"></a-entity>
+        <a-entity mixin="bark" position="3.03 0 4.41" rotation="0 -59 0"
+          geometry="primitive: curved-root; length: 1.74; radius: 0.28; bend: 0.41; rise: 0.18"></a-entity>
+        <a-entity mixin="bark" position="3.65 0 4.55" rotation="0 -26 0"
+          geometry="primitive: curved-root; length: 2.7; radius: 0.58; bend: -0.44"></a-entity>
+
+        <a-entity mixin="bark" position="1.1 0 9.3" rotation="0 184 0"
+          geometry="primitive: curved-root; length: 2.8; radius: 0.60; bend: 0.32"></a-entity>
+        <a-entity mixin="bark" position="0.97 0 8.52" rotation="0 -128 0"
+          geometry="primitive: curved-root; length: 1.95; radius: 0.32; bend: -0.35; rise: 0.18"></a-entity>
+        <a-entity mixin="bark" position="1.1 0 9.3" rotation="0 108 0"
+          geometry="primitive: curved-root; length: 3.15; radius: 0.55; bend: 0.62"></a-entity>
+        <a-entity mixin="bark" position="1.1 0 9.3" rotation="0 -61 0"
+          geometry="primitive: curved-root; length: 2.4; radius: 0.44; bend: -0.36"></a-entity>
+
+        <a-entity mixin="bark" position="-4.8 0 -7" rotation="0 64 0"
+          geometry="primitive: curved-root; length: 3.1; radius: 0.66; bend: -0.65"></a-entity>
+        <a-entity mixin="bark" position="-4.8 0 -7" rotation="0 -56 0"
+          geometry="primitive: curved-root; length: 3.2; radius: 0.65; bend: -0.70"></a-entity>
+        <a-entity mixin="bark" position="-4.8 0 -7" rotation="0 139 0"
+          geometry="primitive: curved-root; length: 3.38; radius: 0.63; bend: -0.65"></a-entity>
+        <a-entity mixin="bark" position="-1.6 0 -6.95" rotation="0 48 0"
+          geometry="primitive: curved-root; length: 2.15; radius: 0.49; bend: 0.21"></a-entity>
+        <a-entity mixin="bark" position="-1.6 0 -6.95" rotation="0 -100 0"
+          geometry="primitive: curved-root; length: 2.4; radius: 0.48; bend: 0.40"></a-entity>
+        <a-entity mixin="bark" position="0.9 0 -9.4" rotation="0 18 0"
+          geometry="primitive: curved-root; length: 2.55; radius: 0.54; bend: 0.50"></a-entity>
+        <a-entity mixin="bark" position="4 0 -9.9" rotation="0 -120 0"
+          geometry="primitive: curved-root; length: 2.57; radius: 0.49; bend: 0.48"></a-entity>
+        <a-entity mixin="bark" position="-1.9 0 8" rotation="0 -68 0"
+          geometry="primitive: curved-root; length: 2.3; radius: 0.53; bend: -0.36"></a-entity>
+        <a-entity mixin="bark" position="6.5 0 5.8" rotation="0 84 0"
+          geometry="primitive: curved-root; length: 2.7; radius: 0.49; bend: 0.64"></a-entity>
+        <a-entity mixin="bark" position="4.9 0 -1" rotation="0 160 0"
+          geometry="primitive: curved-root; length: 2.2; radius: 0.44; bend: 0.43"></a-entity>
+
+        <!-- Let smaller leaves collect near the roots and mushroom clusters. -->
+        <a-entity mixin="fallen-leaf" geometry="shape: 0.82; curl: 0.09" material="color: #806443"
+          position="-1.30 0.006 1.66" rotation="0 -72 0" scale="0.52 0.75 0.66"></a-entity>
+        <a-entity mixin="fallen-leaf" geometry="shape: -0.73; curl: 0.03" material="color: #6d563e"
+          position="-1.53 0.012 1.47" rotation="0 133 0" scale="0.34 0.48 0.47"></a-entity>
+        <a-entity mixin="fallen-leaf" geometry="shape: 0.31; curl: 0.06" material="color: #725343"
+          position="-1.58 0.008 1.83" rotation="0 -107 0" scale="0.30 0.60 0.36"></a-entity>
+        <a-entity mixin="fallen-leaf" geometry="shape: -0.48; curl: 0.06" material="color: #716449"
+          position="-1.85 0.005 2.07" rotation="0 -14 0" scale="0.38 0.52 0.34"></a-entity>
+
+        <a-entity mixin="fallen-leaf" geometry="shape: -0.61; curl: 0.08" material="color: #835b43"
+          position="1.08 0.006 2.28" rotation="0 48 0" scale="0.50 0.72 0.53"></a-entity>
+        <a-entity mixin="fallen-leaf" geometry="shape: 0.66; curl: 0.025" material="color: #726044"
+          position="1.48 0.012 2.75" rotation="0 158 0" scale="0.37 0.51 0.45"></a-entity>
+        <a-entity mixin="fallen-leaf" geometry="shape: -0.25; curl: 0.045" material="color: #796446"
+          position="1.77 0.006 2.98" rotation="0 118 0" scale="0.43 0.58 0.55"></a-entity>
+        <a-entity mixin="fallen-leaf" geometry="shape: 0.52; curl: 0.038" material="color: #6f5141"
+          position="0.95 0.007 2.52" rotation="0 -28 0" scale="0.25 0.52 0.30"></a-entity>
+
+        <a-entity mixin="fallen-leaf" geometry="shape: 0.77; curl: 0.04" material="color: #776244"
+          position="-0.4 0.006 -1.62" rotation="0 -61 0" scale="0.53 0.56 0.58"></a-entity>
+        <a-entity mixin="fallen-leaf" geometry="shape: -0.35; curl: 0.035" material="color: #73533d"
+          position="-0.71 0.012 -1.42" rotation="0 167 0" scale="0.30 0.46 0.43"></a-entity>
+        <a-entity mixin="fallen-leaf" geometry="shape: -0.39; curl: 0.06" material="color: #716549"
+          position="1.43 0.005 -2.17" rotation="0 150 0" scale="0.37 0.49 0.47"></a-entity>
+
+        <a-entity mixin="fallen-leaf" geometry="shape: -0.72; curl: 0.075" material="color: #7a5e40"
+          position="0.60 0.005 4.85" rotation="0 -51 0" scale="0.51 0.73 0.62"></a-entity>
+        <a-entity mixin="fallen-leaf" geometry="shape: 0.78; curl: 0.06" material="color: #665a40"
+          position="0.23 0.007 5.25" rotation="0 18 0" scale="0.38 0.51 0.46"></a-entity>
+        <a-entity mixin="fallen-leaf" geometry="shape: 0.31; curl: 0.03" material="color: #795541"
+          position="1.77 0.005 5.4" rotation="0 58 0" scale="0.47 0.50 0.65"></a-entity>
+        <a-entity mixin="fallen-leaf" geometry="shape: -0.67; curl: 0.068" material="color: #806446"
+          position="-0.72 0.006 6.35" rotation="0 -13 0" scale="0.47 0.57 0.49"></a-entity>
+        <a-entity mixin="fallen-leaf" geometry="shape: 0.36; curl: 0.035" material="color: #6e513f"
+          position="-1 0.012 6.62" rotation="0 77 0" scale="0.31 0.51 0.35"></a-entity>
+
+        <!-- Leaf litter gathers in pockets, with open ground between them. -->
+        <a-entity id="leaf-litter-patches">
+          <a-entity position="-0.42 0 1.13" rotation="0 12 0">
+            <a-entity mixin="fallen-leaf" geometry="shape: -0.77; curl: 0.06" material="color: #7c6045"
+              position="0.24 0.006 0.01" rotation="0 68 0" scale="0.45 0.54 0.51"></a-entity>
+            <a-entity mixin="fallen-leaf" geometry="shape: 0.71; curl: 0.048" material="color: #6c583f"
+              position="-0.25 0.012 -0.06" rotation="0 -110 0" scale="0.33 0.48 0.43"></a-entity>
+            <a-entity mixin="fallen-leaf" geometry="shape: -0.35; curl: 0.027" material="color: #765243"
+              position="0.04 0.006 -0.31" rotation="0 170 0" scale="0.24 0.52 0.36"></a-entity>
+            <a-entity mixin="fallen-leaf" geometry="shape: 0.39; curl: 0.042" material="color: #716349"
+              position="0.47 0.009 -0.24" rotation="0 22 0" scale="0.26 0.44 0.31"></a-entity>
+          </a-entity>
+
+          <a-entity position="2.4 0 1.66" rotation="0 -21 0">
+            <a-entity mixin="fallen-leaf" geometry="shape: 0.64; curl: 0.06" material="color: #7a6448"
+              position="0.16 0.006 0.18" rotation="0 -11 0" scale="0.48 0.57 0.57"></a-entity>
+            <a-entity mixin="fallen-leaf" geometry="shape: -0.54; curl: 0.045" material="color: #72513d"
+              position="0.51 0.008 -0.1" rotation="0 88 0" scale="0.32 0.55 0.39"></a-entity>
+            <a-entity mixin="fallen-leaf" geometry="shape: 0.22; curl: 0.02" material="color: #6a5c44"
+              position="0.42 0.015 0.42" rotation="0 150 0" scale="0.29 0.49 0.34"></a-entity>
+          </a-entity>
+
+          <a-entity position="-2.05 0 4.22" rotation="0 28 0">
+            <a-entity mixin="fallen-leaf" geometry="shape: 0.68; curl: 0.065" material="color: #796148"
+              position="-0.2 0.006 0.29" rotation="0 -106 0" scale="0.4 0.62 0.53"></a-entity>
+            <a-entity mixin="fallen-leaf" geometry="shape: -0.84; curl: 0.048" material="color: #755743"
+              position="0.19 0.006 0.31" rotation="0 -41 0" scale="0.53 0.55 0.62"></a-entity>
+            <a-entity mixin="fallen-leaf" geometry="shape: 0.52; curl: 0.035" material="color: #6d6147"
+              position="0.4 0.01 0.19" rotation="0 39 0" scale="0.31 0.51 0.34"></a-entity>
+            <a-entity mixin="fallen-leaf" geometry="shape: -0.29; curl: 0.032" material="color: #766044"
+              position="0.04 0.013 0.11" rotation="0 142 0" scale="0.34 0.45 0.45"></a-entity>
+            <a-entity mixin="fallen-leaf" geometry="shape: 0.11; curl: 0.054" material="color: #6a5240"
+              position="-0.14 0.01 0.58" rotation="0 109 0" scale="0.26 0.58 0.29"></a-entity>
+          </a-entity>
+
+          <a-entity position="3.35 0 7.98" rotation="0 63 0">
+            <a-entity mixin="fallen-leaf" geometry="shape: -0.68; curl: 0.064" material="color: #795d42"
+              position="0.18 0.005 -0.06" rotation="0 38 0" scale="0.54 0.56 0.64"></a-entity>
+            <a-entity mixin="fallen-leaf" geometry="shape: 0.74; curl: 0.03" material="color: #6d6245"
+              position="-0.27 0.01 0.21" rotation="0 177 0" scale="0.39 0.45 0.44"></a-entity>
+            <a-entity mixin="fallen-leaf" geometry="shape: 0.16; curl: 0.039" material="color: #76523f"
+              position="0.09 0.012 0.46" rotation="0 -113 0" scale="0.31 0.52 0.38"></a-entity>
+          </a-entity>
+
+          <a-entity position="-1.45 0 -10.8" rotation="0 -41 0">
+            <a-entity mixin="fallen-leaf" geometry="shape: 0.78; curl: 0.072" material="color: #806348"
+              position="0.17 0.006 0.05" rotation="0 93 0" scale="0.57 0.62 0.69"></a-entity>
+            <a-entity mixin="fallen-leaf" geometry="shape: -0.49; curl: 0.046" material="color: #6e6043"
+              position="-0.1 0.01 0.53" rotation="0 30 0" scale="0.42 0.46 0.55"></a-entity>
+            <a-entity mixin="fallen-leaf" geometry="shape: 0.23; curl: 0.055" material="color: #745340"
+              position="0.48 0.006 0.43" rotation="0 144 0" scale="0.33 0.54 0.49"></a-entity>
+            <a-entity mixin="fallen-leaf" geometry="shape: 0.51; curl: 0.035" material="color: #715941"
+              position="-0.29 0.011 -0.18" rotation="0 -124 0" scale="0.36 0.43 0.55"></a-entity>
+            <a-entity mixin="fallen-leaf" geometry="shape: -0.26; curl: 0.029" material="color: #785b43"
+              position="-0.2 0.007 0.15" rotation="0 -49 0" scale="0.31 0.5 0.35"></a-entity>
+          </a-entity>
+
+          <a-entity position="5.45 0 -8.55" rotation="0 29 0">
+            <a-entity mixin="fallen-leaf" geometry="shape: -0.67; curl: 0.068" material="color: #7d6247"
+              position="-0.08 0.006 0.26" rotation="0 79 0" scale="0.56 0.62 0.7"></a-entity>
+            <a-entity mixin="fallen-leaf" geometry="shape: 0.76; curl: 0.037" material="color: #6e5744"
+              position="-0.21 0.01 0.02" rotation="0 -52 0" scale="0.46 0.51 0.58"></a-entity>
+            <a-entity mixin="fallen-leaf" geometry="shape: -0.22; curl: 0.045" material="color: #726348"
+              position="0.41 0.011 0.47" rotation="0 177 0" scale="0.34 0.47 0.42"></a-entity>
+            <a-entity mixin="fallen-leaf" geometry="shape: 0.36; curl: 0.029" material="color: #765642"
+              position="0.34 0.006 -0.24" rotation="0 -115 0" scale="0.32 0.43 0.39"></a-entity>
+          </a-entity>
+        </a-entity>
+      </a-entity>
+
+      <!-- 7. An amber glow peeks out of a fallen log to the left of the start. -->
+      <a-entity id="fallen-log" position="-6 0 1.66" rotation="0 68 0">
+        <a-entity position="0 0.83 0" geometry="primitive: hollow-log"
+          material="vertexColorsEnabled: true; roughness: 1"></a-entity>
+        <a-entity data-copy="amber-mushroom" position="-0.27 0.22 1.13" rotation="0 19 0" scale="0.24 0.24 0.24"></a-entity>
+        <a-entity data-copy="amber-mushroom" position="0.20 0.24 0.49" rotation="0 68 0" scale="0.36 0.36 0.36"></a-entity>
+        <a-entity data-copy="amber-mushroom" position="-0.14 0.30 -0.40" rotation="0 -21 0" scale="0.23 0.23 0.23"></a-entity>
+        <a-light type="point" position="0.03 0.56 0.96" color="#ffba71" intensity="2.25" distance="3.3"></a-light>
+      </a-entity>
+      <a-entity mixin="mossy-bark" position="-5.2 0 4" rotation="0 146 0"
+        geometry="primitive: curved-root; length: 1.73; radius: 0.49; bend: -0.2; moss: 0.98"></a-entity>
+
+      <!-- Moss follows shaded roots and gathers around the hollow log. -->
+      <a-entity id="forest-moss">
+        <a-entity mixin="ground-moss" position="-2.12 0 0.88" rotation="0 32 0"
+          scale="0.81 1 0.37" geometry="seed: 1.6; height: 0.083"></a-entity>
+        <a-entity mixin="ground-moss" position="-1.03 0 -0.27" rotation="0 67 0"
+          scale="0.58 0.73 0.24" geometry="seed: 3.8"></a-entity>
+        <a-entity mixin="ground-moss" position="-1.59 0 0.66" rotation="0 -25 0"
+          scale="0.43 0.7 0.26" geometry="seed: 5.1; height: 0.075"></a-entity>
+        <a-entity mixin="ground-moss" position="1.86 0 1.2" rotation="0 -39 0"
+          scale="0.66 0.89 0.41" geometry="seed: 2.3"></a-entity>
+        <a-entity mixin="ground-moss" position="0.92 0 0.59" rotation="0 77 0"
+          scale="0.46 0.82 0.28" geometry="seed: 7.6; height: 0.077"></a-entity>
+        <a-entity mixin="ground-moss" position="-1.33 0 4.89" rotation="0 27 0"
+          scale="0.71 0.93 0.45" geometry="seed: 9.2"></a-entity>
+        <a-entity mixin="ground-moss" position="2.08 0 4.25" rotation="0 78 0"
+          scale="0.78 1 0.29" geometry="seed: 6.4; height: 0.08"></a-entity>
+
+        <a-entity mixin="ground-moss" position="-4.94 0 2.98" rotation="0 20 0"
+          scale="0.91 1 0.43" geometry="seed: 8.3; height: 0.1"></a-entity>
+        <a-entity mixin="ground-moss" position="-4.01 0 2.26" rotation="0 -9 0"
+          scale="0.46 0.73 0.27" geometry="seed: 2.7; height: 0.073"></a-entity>
+        <a-entity mixin="ground-moss" position="-5.08 0 1.05" rotation="0 71 0"
+          scale="0.77 1 0.35" geometry="seed: 4.2"></a-entity>
+        <a-entity mixin="ground-moss" position="-6.82 0 2.56" rotation="0 33 0"
+          scale="0.72 0.9 0.38" geometry="seed: 5.8; height: 0.08"></a-entity>
+      </a-entity>
+
+      <a-light type="hemisphere" color="#c9d8ff" ground-color="#7b5c69" intensity="1.15"></a-light>
+      <a-light type="directional" color="#a9c8ff" intensity="1.25" position="-4 8 2"></a-light>
+      <a-light type="point" color="#ffc389" intensity="12" distance="8" position="2.8 6.2 -6.6"></a-light>
+      <a-light type="point" color="#82e8cc" intensity="3.6" distance="4" position="-1.32 0.64 -0.44"></a-light>
+      <a-light type="point" color="#82e8cc" intensity="3.5" distance="4.5" position="2.32 0.72 6.48"></a-light>
+      <a-light type="point" color="#ffc389" intensity="9" distance="6.5" position="-3.6 3.57 11.15"></a-light>
+
+      <a-camera position="0 0.55 3.5" wasd-controls="acceleration: 22"></a-camera>
+      <a-entity fireflies></a-entity>
     </a-scene>
+    <button type="button" id="breeze-toggle" aria-label="Breeze" aria-pressed="true" hidden>Breeze on</button>
+    <script>
+      const forestLayers = document.getElementById('forest-layers');
+      // Foreground and midground trees, listed as x, z, trunk height, and base radius.
+      const trees = [
+        [-2.45, -1.3, 14.3, 1.02],
+        [2.4, 0.5, 13.1, 0.8],
+        [3.65, 4.55, 15.5, 1.05],
+        [-3.1, 4.8, 16.4, 0.88],
+        [-1.9, 8, 12.2, 1.16],
+        [4.45, 10.9, 15.1, 0.92],
+        [-8.2, 5.5, 14.9, 1.1],
+        [8.1, 9.5, 16.7, 1.15],
+        [7.85, -2.9, 12.7, 1.05],
+        [-6.5, -4.5, 15.1, 0.97],
+        [-1.6, -6.95, 14.6, 1.18],
+        [1.5, -12.7, 13.3, 0.89],
+        [6.25, -5.25, 14.4, 0.82],
+        [-4.3, 8, 16.2, 0.88],
+        [-0.7, 12, 12.7, 0.85],
+        [9, -12, 15.2, 1.14],
+        [3.6, -15.8, 16.3, 0.9],
+        [-1.6, -17, 15.8, 0.86]
+      ];
+      const treeLayers = [
+        { count: 22, radius: 16, spread: 4, offset: 0.12 },
+        { count: 32, radius: 31, spread: 7, offset: 0.32 }
+      ];
+
+      for (const layer of treeLayers) {
+        for (let tree = 0; tree < layer.count; tree++) {
+          // Each layer wraps around the player, with uneven spacing and tree heights.
+          const variation = Math.sin(tree * 2.4 + layer.offset);
+          const angle = 2 * Math.PI * tree / layer.count + layer.offset + 0.08 * variation;
+          const distance = layer.radius + layer.spread * variation;
+          const x = (distance * Math.cos(angle)).toFixed(2);
+          const z = (3.5 + distance * Math.sin(angle)).toFixed(2);
+          const height = 13.5 + 3.0 * Math.sin(tree * 1.7 + layer.offset);
+          const width = 0.95 + 0.3 * variation;
+          trees.push([x, z, height, width]);
+        }
+      }
+
+      for (const [x, z, height, width] of trees) {
+        const variation = (width - 0.95) / 0.3;
+        const crown = 3.4 + 0.55 * variation;
+        forestLayers.insertAdjacentHTML('beforeend', `
+          <a-entity position="${x} 0 ${z}">
+            <a-cone mixin="trunk-bark" position="0 ${height / 2} 0" height="${height}"
+              radius-bottom="${width}" radius-top="${width * 0.32}" segments-radial="10"></a-cone>
+            <a-sphere mixin="canopy" position="0 ${height * 0.92} 0" radius="${crown}"
+              scale="1.18 0.86 1" segments-width="14" segments-height="10"></a-sphere>
+            <a-sphere mixin="canopy" position="${variation * 2} ${height * 0.81} 0.9" radius="${crown * 0.7}"
+              scale="1.15 0.7 1" segments-width="14" segments-height="10"></a-sphere>
+          </a-entity>
+        `);
+      }
+
+      const petalColors = {
+        blue: { color: '#a1d9ff', emissive: '#467cb6' },
+        apricot: { color: '#ffc29a', emissive: '#b36238' },
+        magenta: { color: '#d36ba9', emissive: '#932575' }
+      };
+      for (const copy of document.querySelectorAll('[data-flower], [data-copy]')) {
+        const original = document.getElementById(copy.dataset.flower ?? copy.dataset.copy);
+        for (const part of original.children) {
+          copy.append(part.cloneNode(true));
+        }
+        const petals = petalColors[copy.dataset.petals];
+        if (petals) {
+          for (const petal of copy.querySelectorAll('[mixin="petal"]')) {
+            petal.setAttribute('material', petals);
+          }
+        }
+      }
+
+      // Add the textured undersides after cloning so they appear on marked caps only.
+      for (const mushroom of document.querySelectorAll('[data-gills]')) {
+        const underside = document.createElement('a-entity');
+        underside.setAttribute('mixin', mushroom.dataset.gills);
+        mushroom.append(underside);
+      }
+
+      const flowers = document.querySelectorAll('#giant-flower, #lavender-flower, [data-flower]');
+      flowers.forEach((flower, index) => {
+        const head = flower.querySelector('a-entity');
+        head.setAttribute('breeze', {
+          degrees: 2.35 + ((index + 2) % 4) * 0.17,
+          period: 7.8 + (index % 5) * 0.7,
+          phase: index * 1.65
+        });
+      });
+
+      const understory = document.querySelectorAll('#forest-leaves, [data-copy="forest-leaves"]');
+      understory.forEach((plant, index) => {
+        if (plant.hasAttribute('data-sheltered')) return;
+        const fan = plant.querySelector('[data-leaf-fan]');
+        fan.setAttribute('breeze', {
+          degrees: 1.65 + (index % 4) * 0.16,
+          period: 7.3 + (index % 5) * 0.65,
+          phase: index * 1.58 + 0.7
+        });
+      });
+
+      const crowns = document.querySelectorAll(
+        '#giant-tree > a-sphere:not([mixin="bark"]), #background-trees > a-sphere'
+      );
+      crowns.forEach((crown, index) => {
+        if (index > 2 && index % 4 !== 0) return;
+        crown.setAttribute('breeze', {
+          degrees: 0.95 + (index % 3) * 0.16,
+          period: 11.8 + (index % 4) * 0.85,
+          phase: index * 1.94 + 0.4
+        });
+      });
+
+      const breezeToggle = document.getElementById('breeze-toggle');
+      breezeToggle.addEventListener('click', () => {
+        breezeEnabled = !breezeEnabled;
+        breezeToggle.setAttribute('aria-pressed', String(breezeEnabled));
+        breezeToggle.textContent = breezeEnabled ? 'Breeze on' : 'Breeze off';
+      });
+    </script>
   </body>
 </html>
